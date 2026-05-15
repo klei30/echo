@@ -1,0 +1,30 @@
+# API
+fastapi==0.115.0
+uvicorn==0.30.0
+pydantic==2.9.0
+pydantic-settings==2.5.0
+python-dotenv==1.0.1
+httpx>=0.27.2
+python-jose[cryptography]>=3.3.0
+bcrypt>=4.0.0
+
+# Database
+aiosqlite>=0.20.0
+
+# Memory
+mem0ai>=0.1.50
+openai>=1.51.0
+fastembed>=0.3.0
+
+# Scheduler
+apscheduler>=3.10.0
+
+# Training config
+pyyaml>=6.0
+
+# Numpy
+numpy>=1.26.0
+
+# --- install separately (heavy GPU deps) ---
+# LlamaFactory:  pip install llamafactory
+# Unsloth:       pip install unsloth

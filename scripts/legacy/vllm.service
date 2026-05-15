@@ -1,0 +1,25 @@
+[Unit]
+Description=Echo vLLM - legacy Qwen2.5-7B personal model server
+After=network.target
+
+[Service]
+Type=simple
+User=klei
+WorkingDirectory=/home/klei
+Environment=VLLM_ALLOW_RUNTIME_LORA_UPDATING=1
+Environment=HF_HOME=/home/klei/.cache/huggingface
+ExecStart=/home/klei/vllm-env/bin/python -m vllm.entrypoints.openai.api_server \
+    --model Qwen/Qwen2.5-7B-Instruct \
+    --port 8001 \
+    --host 0.0.0.0 \
+    --enable-lora \
+    --max-lora-rank 64 \
+    --gpu-memory-utilization 0.85 \
+    --dtype auto
+Restart=on-failure
+RestartSec=15
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
