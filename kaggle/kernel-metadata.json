@@ -1,0 +1,16 @@
+{
+  "id": "kleialiajjj/echo-gemma-4-good-demo",
+  "title": "Echo Gemma 4 Good Demo",
+  "code_file": "echo_gemma4_good_demo.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": false,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "keywords": [
+    "education"
+  ],
+  "competition_sources": [
+    "gemma-4-good-hackathon"
+  ]
+}

@@ -1,111 +1,67 @@
-# Echo Kaggle Notebook
+# Echo Kaggle Submission
 
-Main file:
+Public notebook:
+
+<https://www.kaggle.com/code/kleialiajjj/echo-gemma-4-good-demo>
+
+Source notebook:
 
 - `echo_gemma4_good_demo.ipynb`
 
-## How It Runs
+## Vision
 
-The notebook uses a real Echo runtime. Set `ECHO_BASE_URL` to a reachable Home Brain, or let the notebook bootstrap the public repo, vLLM Gemma 4, and Echo inside Kaggle.
+Echo is a local-first AI proof engine that turns real-world work into
+opportunity-ready evidence. The notebook follows Noor, a public-safe learner
+persona whose ability is visible in rough artifacts: repair notes, prototype
+tests, teaching moments, feedback, and practice logs.
 
-Optional environment variables:
+Gemma 4 reads those signals, extracts structured evidence, chooses Echo tool
+actions, builds Proof Cards, identifies missing proof, and keeps the next step
+available through Home Brain and offline/mobile continuity.
 
-```bash
-ECHO_BASE_URL=https://your-echo-demo-url
-ECHO_TOKEN=optional-existing-jwt
-ECHO_DEMO_SEED_TOKEN=optional-demo-seed-token
-ECHO_GITHUB_REPO=https://github.com/klei30/echo
-```
+## Run Modes
 
-If `ECHO_TOKEN` is not set and `ECHO_DEMO_SEED_TOKEN` is set, the notebook calls `POST /v1/demo/seed` and uses the returned demo JWT. If neither token is set, it registers a temporary empty demo user.
+The notebook is designed for judged execution, not only for a perfect local
+machine.
 
-## Real Runtime Requirement
+| Mode | How to run | What it proves |
+| --- | --- | --- |
+| Hosted Echo | Set `ECHO_BASE_URL` to a reachable Home Brain backend | Real Echo API, seeded demo user, runtime negotiation, proof/opportunity flow |
+| Kaggle-local Gemma | Attach a Gemma 4 model and set `GEMMA4_MODEL_PATH` or `KAGGLE_GEMMA4_MODEL_PATH` | vLLM + Echo bootstrap, real Gemma runtime, optional bounded training path |
+| Presentation fixture | No backend/model required, or set `ECHO_FORCE_PRESENTATION_MODE=1` | Full product story executes with clearly labeled fixture evidence |
 
-For Kaggle, the notebook should run top-to-bottom against real Gemma 4 and Echo:
+The latest Kaggle version completed successfully with `KernelWorkerStatus.COMPLETE`.
 
-```bash
-ECHO_GITHUB_REPO=https://github.com/klei30/echo
-GEMMA4_MODEL_PATH=/kaggle/input/<your-gemma4-model-folder>
-GEMMA4_MAX_MODEL_LEN=8192
-ECHO_INSTALL_DEPS=1
-ECHO_RUN_TRAINING=1
-```
+## What The Notebook Shows
 
-Expected behavior:
+1. Runtime negotiation: Home Brain, Echo Cloud, This Device, fixture fallback.
+2. First-read onboarding for Noor.
+3. Public-safe journey seed data.
+4. Proof Camera: Gemma-style extraction from a real-world artifact payload.
+5. Tool decision: create proof, log outcome, generate opportunity, or request feedback.
+6. Before/after opportunity readiness.
+7. Daily practice and check-in loop.
+8. Current Read, reality check, and growth timeline.
+9. Decision Room: council, tournament, and parallel-self reasoning.
+10. Training readiness, dataset examples, eval gate, and adapter hot-swap boundary.
+11. Offline export for This Device continuity.
+12. Final judged evidence dashboard.
 
-- It starts or connects to vLLM Gemma 4.
-- It starts or connects to Echo FastAPI.
-- It shows Proof Camera, Gemma tool decision, proof creation, opportunity readiness, offline export, privacy boundary, bounded real Unsloth LoRA training, Shadow Clone/LoRA surfaces, and final capability report.
-- It does not require your local Home Brain or a private token.
-- It does require a Kaggle GPU runtime and an attached Gemma 4 model path for real training, unless `ECHO_BASE_URL` points to a hosted Home Brain.
+## Submission Assets
 
-Live mode is optional and should be used for the video/live demo:
+| Asset | Location |
+| --- | --- |
+| Writeup draft/support copy | `submission/writeup.md` |
+| Link and checklist helper | `submission/attachments.md` |
+| Media gallery images | `media_gallery/` |
+| Kaggle metadata | `kernel-metadata.json` |
 
-```bash
-ECHO_BASE_URL=https://your-echo-demo-url
-ECHO_DEMO_SEED_TOKEN=private-token
-ECHO_GITHUB_REPO=https://github.com/klei30/echo
-```
+## Final Manual Checks
 
-## GitHub Recommendation
+- Kaggle writeup title/subtitle match `submission/writeup.md`.
+- Impact Track is selected.
+- GitHub repo link is attached.
+- Kaggle notebook link is attached.
+- Cover image and video are attached in the Kaggle writeup UI.
+- No private `.env`, DB files, logs, adapters, raw training data, or active tunnel URLs are attached.
 
-You do not need the public GitHub repo before building the notebook. You should have it public before final Kaggle submission because judges usually need inspectable code, architecture, and reproducibility.
-
-Before pushing or sharing:
-
-- Move secret-like values out of `config.py` and into `.env`.
-- Verify `.env`, DB files, logs, adapters, and training data are not tracked.
-- Do not publish live tunnel URLs that use default `JWT_SECRET` or `ECHO_SECRET`.
-- Update notebook placeholders for video and live demo links.
-- Keep `ECHO_DEMO_SEED_TOKEN` private. It enables repeatable public demo data.
-
-## Best Demo Path
-
-The notebook intentionally shows the highest-signal product flow:
-
-1. Runtime negotiation: Home Brain, Cloud Echo, This Device.
-2. First-read onboarding.
-3. Seeded public-safe learner journey.
-4. Proof Camera: Gemma 4 extracts evidence from a real-world artifact payload.
-5. Tool decision: Gemma 4 chooses an Echo action and executes it.
-6. Gemma-first chat.
-7. Today mission and practice.
-8. Current read and reality check.
-9. Proof creation.
-10. Before/after opportunity readiness.
-11. Decision Room.
-12. Training readiness.
-13. Offline export.
-14. Privacy boundary: private memory pack vs public Proof Card.
-
-## Final Submission Gaps to Close
-
-Before submitting to Kaggle:
-
-- Replace `TODO` links in the notebook with the final Kaggle notebook, video, live demo, and screenshots/media links.
-- Push a cleaned public GitHub repo.
-- Add a short video showing the same flow as the notebook.
-- Keep the real-runtime bootstrap working, and keep a hosted `ECHO_BASE_URL` as backup if Kaggle startup is slow.
-- In public copy, describe Echo as a local-first opportunity engine, not a chatbot, clone app, or productivity tool.
-- Claim the notebook runs a bounded real Unsloth LoRA demo loop by default when Kaggle has GPU/model/dependencies. Keep the longer production clone tournament framed as optional.
-- If possible, wire the Flutter camera flow to `POST /v1/vision/analyze` and show it in the video.
-- If possible, show Home Brain pairing/tunnel continuity and This Device offline continuity in the video.
-
-## Live Demo Endpoints
-
-These are now available for live notebook runs:
-
-- `POST /v1/demo/seed` creates a protected, repeatable Proof Camera demo user.
-- `POST /v1/vision/analyze` analyzes artifact text/image inputs into proof-ready JSON, through Gemma and Echo validation.
-- `POST /v1/proof/from-artifact` analyzes an artifact and saves it as proof.
-- `GET /v1/tools/schema` exposes the Echo tool schema.
-- `POST /v1/gemma/tool-call` asks Gemma to choose one Echo action and optionally execute it.
-
-## Current Missing Live Pieces
-
-The notebook now exercises real routes. Remaining polish before final submission:
-
-- Real mobile camera upload in the Flutter app to send `image_url` or `image_base64` into `/v1/vision/analyze`.
-- End-to-end validation with the exact Gemma 4 model mount used for submission.
-- Confirm `/v1/training/demo-loop` completes within Kaggle time limits; use `/trigger-training` only when you intentionally want the full production clone tournament.
-- A video showing Home Brain pairing and This Device offline behavior.

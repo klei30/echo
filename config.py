@@ -5,7 +5,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     openrouter_api_key: str = ""
-    openai_api_key: str = ""  # legacy — voice TTS/STT only
+    openai_api_key: str = ""  # legacy - voice TTS/STT only
     google_api_key: str = ""  # Gemma 4 via Google AI Studio
     teacher_model: str = "gemma-4-31b-it"
     teacher_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
@@ -13,12 +13,12 @@ class Settings(BaseSettings):
     # Local SQLite
     sqlite_path: str = "./echo.db"
 
-    # Gemma 4 — primary local inference lane on port 8003
+    # Gemma 4 - primary local inference lane on port 8003
     gemma4_enabled: bool = True
     gemma4_vllm_base_url: str = "http://127.0.0.1:8003/v1"
     gemma4_base_model: str = "gemma4_e2b"
     gemma4_max_model_len: int = 32768
-    gemma4_training_model_path: str = "C:/Users/ASUS/.cache/huggingface/hub/models--unsloth--gemma-4-E2B-it/snapshots/f0c5915f17ad6c66dbeb577fb06ff8925bf8d7ae"
+    gemma4_training_model_path: str = ""
 
     # Local adapter + training storage
     adapters_dir: str = "./adapters"
@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     livekit_api_key: str = "devkey"
     livekit_api_secret: str = "secret"
 
-    # Firebase Cloud Messaging — for background push notifications
+    # Firebase Cloud Messaging - for background push notifications
     fcm_server_key: str = ""
 
     # Training runtime portability
@@ -71,7 +71,7 @@ class Settings(BaseSettings):
     # Override vLLM stop/start commands on linux_local (space-separated, shlex-safe)
     echo_vllm_stop_command: str = ""
     echo_vllm_start_command: str = ""
-    # Set true when vLLM is managed externally — skip stop/start around training
+    # Set true when vLLM is managed externally - skip stop/start around training
     echo_vllm_externally_managed: bool = False
 
     @property

@@ -5,7 +5,7 @@
 <h1 align="center">Echo</h1>
 
 <p align="center">
-  <strong>A local-first personal AI system that turns scattered effort into private proof, practice, and direction.</strong>
+  <strong>A local-first AI proof engine that turns real-world work into opportunity-ready evidence.</strong>
 </p>
 
 <p align="center">
@@ -13,7 +13,7 @@
   &nbsp;
   <a href="https://github.com/klei30/echo_mobile"><img src="https://img.shields.io/badge/Mobile%20App-echo__mobile-black?style=flat-square&logo=flutter" alt="Mobile App" /></a>
   &nbsp;
-  <a href="kaggle/echo_gemma4_good_demo.ipynb"><img src="https://img.shields.io/badge/Kaggle-Gemma%204%20Good-20BEFF?style=flat-square&logo=kaggle" alt="Kaggle Notebook" /></a>
+  <a href="https://www.kaggle.com/code/kleialiajjj/echo-gemma-4-good-demo"><img src="https://img.shields.io/badge/Kaggle-Gemma%204%20Good-20BEFF?style=flat-square&logo=kaggle" alt="Kaggle Notebook" /></a>
 </p>
 
 <p align="center">
@@ -21,14 +21,16 @@
   &nbsp;|&nbsp;
   <a href="https://github.com/klei30/echo_mobile">Mobile App</a>
   &nbsp;|&nbsp;
-  <a href="kaggle/echo_gemma4_good_demo.ipynb">Kaggle Notebook</a>
+  <a href="https://www.kaggle.com/code/kleialiajjj/echo-gemma-4-good-demo">Kaggle Notebook</a>
 </p>
 
 ---
 
-> Evidence in the wrong format is still evidence.
+> Talent is often invisible because the proof is trapped in the wrong format.
 
-Echo helps people notice, practice, and package the ability they are already showing in ordinary work: conversations, repairs, notes, projects, check-ins, explanations, feedback, screenshots, and outcomes.
+Echo helps under-observed learners and builders turn ordinary work into usable proof: conversations, repairs, notes, projects, check-ins, explanations, feedback, screenshots, and outcomes.
+
+The vision is simple: a person should not need perfect writing, a polished portfolio, stable internet, or a well-connected mentor before their ability can be seen. Echo uses Gemma 4 to read real-world effort, extract the evidence, create private Proof Cards, identify what proof is still missing, and recommend the next step toward a scholarship, apprenticeship, portfolio, local job, or community opportunity.
 
 It is built around a private loop:
 
@@ -38,7 +40,7 @@ It is built around a private loop:
 4. Record the outcome.
 5. Use the result to improve the map, the evidence, and the personal model.
 
-Most AI products answer questions. Echo helps a person understand what their life is already proving, practice the next useful step, and turn scattered moments into evidence they can actually use.
+Most AI products answer questions. Echo helps a person build the evidence to be believed.
 
 ---
 
@@ -52,7 +54,20 @@ Most AI products answer questions. Echo helps a person understand what their lif
 | Evaluating the architecture | [Home Brain](#home-brain), [Personal Training](#personal-training), [Privacy Boundaries](#privacy-boundaries) |
 | Connecting agents | [MCP Workflows](#mcp-workflows) |
 
+## Judging Links
+
+| Asset | Link |
+| --- | --- |
+| Backend repository | <https://github.com/klei30/echo> |
+| Mobile app repository | <https://github.com/klei30/echo_mobile> |
+| Kaggle notebook | <https://www.kaggle.com/code/kleialiajjj/echo-gemma-4-good-demo> |
+| Notebook source | [kaggle/echo_gemma4_good_demo.ipynb](kaggle/echo_gemma4_good_demo.ipynb) |
+| Writeup support files | [kaggle/submission](kaggle/submission) |
+| Media gallery assets | [kaggle/media_gallery](kaggle/media_gallery) |
+
 ## What Echo Does
+
+Echo is for people whose ability is real but under-documented: students without mentors, builders without polished portfolios, people in low-connectivity places, and anyone whose best evidence lives in rough artifacts instead of official credentials.
 
 - Builds a living **Pattern Map** from conversations, memories, check-ins, outcomes, proof, and repeated behavior.
 - Generates one concrete **Next Proof Step** for daily practice.
@@ -220,9 +235,13 @@ Echo uses Gemma 4 across the product:
 
 The Kaggle notebook demonstrates the Gemma 4 Good flow:
 
+<https://www.kaggle.com/code/kleialiajjj/echo-gemma-4-good-demo>
+
+Source notebook:
+
 [kaggle/echo_gemma4_good_demo.ipynb](kaggle/echo_gemma4_good_demo.ipynb)
 
-It is the fastest way to review the core concept without running the full Home Brain stack.
+It is the fastest way to review the core concept without running the full Home Brain stack. It runs in two judged-safe paths: a real Echo/Gemma runtime when a hosted backend or mounted Gemma 4 model is available, and a clearly labeled presentation fixture when Kaggle has no model input attached.
 
 ---
 

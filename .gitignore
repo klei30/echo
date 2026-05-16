@@ -27,5 +27,9 @@ kaggle/.jupyter_config/
 kaggle/.jupyter_runtime/
 kaggle/.jupyter_data/
 kaggle/echo_gemma4_executed.ipynb
+kaggle/echo_gemma4_good_demo.*.executed.ipynb
 kaggle/notebook_output.txt
+.kaggle_publish/
+.kaggle_kernel_output/
+kaggle_competition_tmp/
 .jupyter-runtime/
