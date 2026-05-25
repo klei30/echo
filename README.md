@@ -28,11 +28,15 @@
 
 > Talent is often invisible because the proof is trapped in the wrong format.
 
-Echo helps under-observed learners and builders turn ordinary work into usable proof: conversations, repairs, notes, projects, check-ins, explanations, feedback, screenshots, and outcomes.
+Most people are talented. Only some discover it, and often only because someone happened to notice the right signal at the right time.
 
-The vision is simple: a person should not need perfect writing, a polished portfolio, stable internet, or a well-connected mentor before their ability can be seen. Echo uses Gemma 4 to read real-world effort, extract the evidence, create private Proof Cards, identify what proof is still missing, and recommend the next step toward a scholarship, apprenticeship, portfolio, local job, or community opportunity.
+Echo is built for the people who are missed by that accident: learners, builders, repairers, translators, caregivers, explainers, and self-taught makers whose ability is real but under-documented. Their best evidence may live in rough notes, repairs, screenshots, practice logs, family responsibilities, feedback from others, or a project that worked before it looked polished.
 
-It is built around a private loop:
+Echo is not an AI mentor or a productivity chatbot. It is local-first proof infrastructure: a private loop that helps a person notice, document, test, and package evidence of ability without turning their private life into somebody else's training data.
+
+Gemma 4 reads real-world effort, extracts the signal, creates private Proof Cards, identifies what proof is still missing, and recommends the next step toward a scholarship, apprenticeship, portfolio, local job, maker grant, or community opportunity.
+
+The loop is deliberately small and repeatable:
 
 1. Capture real signal from what someone already does.
 2. Turn that signal into a living map of patterns and proof.
@@ -40,7 +44,7 @@ It is built around a private loop:
 4. Record the outcome.
 5. Use the result to improve the map, the evidence, and the personal model.
 
-Most AI products answer questions. Echo helps a person build the evidence to be believed.
+Most AI products answer questions. Echo helps a person build the evidence to be believed, while keeping raw memory private and the user in control of what becomes public proof.
 
 ---
 
@@ -98,6 +102,8 @@ Most people discover their own talent by accident. A teacher notices something. 
 The systems that create opportunity reward people who already know how to document themselves: polished writing, stable internet, public portfolios, confident interviews. But real ability often shows up somewhere else: in repairs, explanations, care work, translations, rough sketches, practice logs, and the way other people rely on someone without either person naming it.
 
 Echo is built around one belief: talent is hidden in ordinary behavior. The things someone keeps returning to, finishes without being asked, improves quietly, or struggles to explain to others are signal. Echo captures that signal privately, turns it into proof, and closes the loop between what someone has already done and where they could go next.
+
+That makes Echo a response to a dignity problem as much as a product problem. AI should not reduce a person to a score, transcript, profile, or collection of extractable data. It should help people keep agency over their own story. Echo separates private memory from public proof so a user can decide what becomes visible, what stays local, and what evidence is strong enough to carry into an opportunity system.
 
 ## Product Loop
 
@@ -188,6 +194,8 @@ Home Brain owns:
 
 Echo adapts by training adapter variants on the user's own signal, then evaluating them before anything live changes.
 
+The model does not learn a generic persona. It learns which evidence, proof steps, decision patterns, and response styles actually helped this user move forward. Training is explicit, local, and eval-gated.
+
 ```text
 Feedback -> Preference Pairs -> Training Data -> Custom LoRA -> Eval -> Home Brain
 ```
@@ -216,6 +224,22 @@ User signal
 
 The adapter belongs to the user. It is trained on their signal, on their machine, and evaluated before it touches the live runtime.
 
+### Shadow Clone Training
+
+The training architecture takes inspiration from the Shadow Clone idea: many small attempts explore different strategies, then useful experience returns to the original system. In Echo this is a technical metaphor, not the product identity.
+
+Each training lane acts like a specialized clone:
+
+| Clone lane | What it explores |
+| --- | --- |
+| **SFT** | Which answers, proof steps, and summaries helped most |
+| **SeqKD** | What teacher-model reasoning should be distilled into the Gemma lane |
+| **Self-critique** | Where weak outputs should be corrected |
+| **Group DPO** | Which Decision Room choices the user preferred |
+| **On-policy** | How live Echo responses can improve from real outcomes |
+
+The eval gate decides what comes back. If an adapter does not pass, Echo keeps the previous Home Brain instead of promoting a weaker model.
+
 ---
 
 ## Gemma 4 Usage
@@ -242,6 +266,8 @@ Source notebook:
 [kaggle/echo_gemma4_good_demo.ipynb](kaggle/echo_gemma4_good_demo.ipynb)
 
 It is the fastest way to review the core concept without running the full Home Brain stack. It runs in two judged-safe paths: a real Echo/Gemma runtime when a hosted backend or mounted Gemma 4 model is available, and a clearly labeled presentation fixture when Kaggle has no model input attached.
+
+For full Kaggle-local vLLM mode, the GPU matters. Use T4, L4, A10/A10G, A100, L40/L40S, or newer. Kaggle P100/K80-class GPUs are not reliable with current vLLM CUDA wheels; on those GPUs the notebook can use a real Transformers inference fallback, but full vLLM hot-swap and Unsloth training proof should use a compatible GPU or a hosted `ECHO_BASE_URL`.
 
 ---
 
