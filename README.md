@@ -226,7 +226,9 @@ The adapter belongs to the user. It is trained on their signal, on their machine
 
 ### Shadow Clone Training
 
-The training architecture takes inspiration from the Shadow Clone idea: many small attempts explore different strategies, then useful experience returns to the original system. In Echo this is a technical metaphor, not the product identity.
+The training architecture takes inspiration from Naruto's Shadow Clone training arc. Naruto uses many clones to practice an extremely difficult technique, the Rasenshuriken, in parallel. Each clone tries, fails, adjusts, and when the clones disappear, their experience returns to the original. The point is not duplication for its own sake. It is accelerated learning through many bounded attempts.
+
+Echo uses that idea as a technical metaphor, not as product branding. The system creates multiple training views from the user's signal, lets each one explore a different learning strategy, evaluates the results, and only merges back what actually improves the Home Brain.
 
 Each training lane acts like a specialized clone:
 
