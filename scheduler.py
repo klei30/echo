@@ -8,12 +8,10 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from config import settings
 from db.database import get_conn
-from training.collector import count_untrained_pairs, mark_used
-from training.orchestrator import pick_clone_winner, prepare_clone_datasets, run_clone_training, run_training
-from training.adapter import hot_swap_adapter, get_last_checkpoint
-from training.runtime import start_gemma_vllm_after_training, stop_gemma_vllm_for_training
+from training.collector import count_untrained_pairs
+from training.coordinator import run_training_cycle
 from training.summary import get_training_summary
-from training.state import create_training_run, finish_training_run
+from training.state import finish_training_run, try_create_training_run
 from loop_events import record_event
 from providers.teacher import chat_with_teacher
 
@@ -51,97 +49,52 @@ async def nightly_training_job() -> None:
         if n < settings.min_pairs_for_training and not dpo_ready:
             log.info("Skip user=%s only %d pairs and dpo_ready=%s", user_id, n, dpo_ready)
             continue
-        await record_event(
-            user_id,
-            "training_started",
-            "scheduler",
-            f"Nightly shadow training started with {n} untrained moments.",
-            {"pairs": n},
-            weight=1.5,
-        )
-        run_id = await create_training_run(user_id, lane, n)
-        stopped = False
+        run_id = await try_create_training_run(user_id, lane, n)
+        if not run_id:
+            log.info("Skip user=%s because the GPU training slot is busy", user_id)
+            continue
         try:
-            prev = await get_last_checkpoint(user_id, lane=lane)
-            used_pair_ids: set[int] = set()
-            use_clone_tournament = True
-            clone_data: dict = {}
+            await record_event(
+                user_id,
+                "training_started",
+                "scheduler",
+                f"Nightly shadow training started with {n} untrained moments.",
+                {"run_id": run_id, "pairs": n},
+                weight=1.5,
+            )
+            result = await run_training_cycle(user_id, lane, run_id)
+            status = result.get("status") or "failed"
+            promoted = bool(result.get("promoted"))
+            restore_ok = bool(result.get("restore_ok", True))
+            await finish_training_run(
+                run_id,
+                status,
+                adapter_path=result.get("promoted_path"),
+                error=(
+                    result.get("reason")
+                    if status == "skipped"
+                    else ("Previous adapter restore failed." if status == "complete_restore_failed" else None)
+                ),
+                summary=result.get("summary") or result,
+            )
             try:
-                clone_data = await prepare_clone_datasets(user_id, lane=lane)
-                if not any(clone_data.get(k) for k in ("seqkd", "self_critique", "group_dpo", "on_policy")):
-                    use_clone_tournament = False
-            except Exception as prep_err:
-                log.warning("Nightly clone prep failed user=%s: %s", user_id, prep_err)
-                use_clone_tournament = False
-
-            stopped = await stop_gemma_vllm_for_training()
-            if use_clone_tournament:
-                adapter_paths = await run_clone_training(
-                    user_id,
-                    clone_data,
-                    prev_checkpoint=prev,
-                    lane=lane,
-                    mark_pairs_used=False,
-                    used_ids_out=used_pair_ids,
-                )
-            else:
-                single_path = await run_training(
-                    user_id,
-                    prev_checkpoint=prev,
-                    lane=lane,
-                    mark_pairs_used=False,
-                    used_ids_out=used_pair_ids,
-                )
-                adapter_paths = {"base": single_path} if single_path else {}
-
-            if stopped:
-                await start_gemma_vllm_after_training()
-
-            if use_clone_tournament and len(adapter_paths) > 1:
-                path = await pick_clone_winner(user_id, adapter_paths, lane=lane, exclude_pair_ids=used_pair_ids)
-            else:
-                path = next(iter(adapter_paths.values()), None) if adapter_paths else None
-            if path:
-                swapped = await hot_swap_adapter(user_id, path, record_checkpoint=True, lane=lane)
-                eval_result: dict = {}
-                eval_failed = False
-                if swapped:
-                    from training.evaluator import evaluate_new_adapter
-                    try:
-                        eval_result = await evaluate_new_adapter(user_id, path, prev, lane=lane, exclude_pair_ids=used_pair_ids)
-                        if not eval_result.get("passed", True):
-                            eval_failed = True
-                            if prev:
-                                await hot_swap_adapter(user_id, prev, record_checkpoint=False, lane=lane)
-                            log.warning("Nightly eval failed user=%s score=%s", user_id, eval_result.get("score"))
-                    except Exception as eval_err:
-                        log.warning("Nightly eval error user=%s: %s — keeping adapter", user_id, eval_err)
-                if swapped and not eval_failed and used_pair_ids:
-                    await mark_used(user_id, used_pair_ids)
-                    log.info("Marked %d nightly pairs used user=%s", len(used_pair_ids), user_id)
-                summary = await get_training_summary(user_id, lane=lane)
-                summary["eval"] = eval_result
-                final_status = "complete_eval_failed" if eval_failed else ("complete" if swapped else "complete_adapter_not_loaded")
-                await finish_training_run(
-                    run_id,
-                    final_status,
-                    adapter_path=path,
-                    error=(f"Eval failed (score={eval_result.get('score')}). Rolled back." if eval_failed else (None if swapped else "Adapter trained but vLLM hot-swap failed.")),
-                    summary=summary,
-                )
                 await record_event(
                     user_id,
-                    "training_completed" if (swapped and not eval_failed) else ("training_eval_failed" if eval_failed else "training_completed_adapter_not_loaded"),
+                    "training_completed" if promoted else "training_not_promoted",
                     "scheduler",
-                    "Nightly shadow training completed and passed eval." if (swapped and not eval_failed) else ("Nightly training completed but eval failed — previous adapter kept." if eval_failed else "Nightly training completed, but adapter was not loaded into vLLM."),
-                    {"run_id": run_id, "path": path, "summary": summary, "adapter_loaded": swapped and not eval_failed, "eval": eval_result},
-                    weight=2.0,
+                    "Nightly shadow training completed and promoted a stronger adapter."
+                    if promoted
+                    else (
+                        "Nightly training rejected the candidate, but restoring the previous adapter needs attention."
+                        if not restore_ok
+                        else "Nightly shadow training completed; the previous Home Brain was kept."
+                    ),
+                    {"run_id": run_id, "result": result},
+                    weight=2.0 if promoted else 1.0,
                 )
-            else:
-                await finish_training_run(run_id, "skipped", error="No adapter was produced.")
+            except Exception:
+                log.exception("Could not record nightly training completion user=%s run=%s", user_id, run_id)
         except Exception as e:
-            if stopped:
-                await start_gemma_vllm_after_training()
             await finish_training_run(run_id, "failed", error=str(e))
             await record_event(
                 user_id,

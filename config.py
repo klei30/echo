@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     confidence_threshold: float = 0.70
     min_pairs_for_training: int = 20
     quality_threshold: float = 0.6
+    evaluation_holdout_pairs: int = 8
+    min_evaluation_pairs: int = 3
+    adapter_promotion_min_score: float = 0.25
+    adapter_promotion_margin: float = 0.01
 
     # Teacher policy: Gemma4 is primary; teacher LLM is sparse calibration.
     teacher_policy_enabled: bool = True
@@ -64,6 +68,10 @@ class Settings(BaseSettings):
     echo_wsl_training_python: str = "/home/klei/vllm-env/bin/python3"
     # PYTHONPATH inside WSL for Gemma 4-compatible Transformers overrides
     echo_wsl_training_pythonpath: str = "/home/klei/gemma4-transformers"
+    # Optional WSL overrides. Empty values use WSL/user defaults and a
+    # repository-relative vLLM start script.
+    echo_wsl_hf_home: str = ""
+    echo_wsl_vllm_start_script: str = ""
     # Override Python used for linux_local training (defaults to sys.executable)
     echo_training_python: str = ""
     # Override PYTHONPATH injected into the linux_local training subprocess

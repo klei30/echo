@@ -94,7 +94,9 @@ async def get_training_summary(user_id: str, lane: str = "gemma4_e2b") -> dict:
     blocked_reason = None
     if data_ready_for_training and not runtime["available"]:
         mode = runtime["mode"]
-        if mode == "windows_wsl":
+        if runtime.get("status") == "training_model_unconfigured":
+            blocked_reason = "GEMMA4_TRAINING_MODEL_PATH is not configured"
+        elif mode == "windows_wsl":
             distro = runtime.get("wsl_distro", settings.echo_wsl_distro)
             blocked_reason = f"WSL distro {distro} is unavailable"
         elif mode == "linux_local":

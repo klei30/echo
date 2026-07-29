@@ -173,6 +173,27 @@ async def hot_swap_adapter(
         return False
 
 
+async def unload_adapter(user_id: str, lane: str = "gemma4_e2b") -> bool:
+    """Unload a user's LoRA without changing the promoted checkpoint."""
+    lora_name = lora_name_for_user(user_id, lane=lane)
+    vllm_root = settings.gemma4_vllm_base_url.rstrip("/")
+    if vllm_root.endswith("/v1"):
+        vllm_root = vllm_root[:-3]
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{vllm_root}/v1/unload_lora_adapter",
+                json={"lora_name": lora_name},
+            )
+            # vLLM may report "not loaded"; the desired final state is still met.
+            if resp.status_code not in (200, 404):
+                resp.raise_for_status()
+        return True
+    except Exception as e:
+        log.warning("LoRA unload failed user=%s lane=%s: %s", user_id, lane, e)
+        return False
+
+
 async def vllm_model_loaded(user_id: str, lane: str = "gemma4_e2b") -> bool:
     lora_name = lora_name_for_user(user_id)
     vllm_base_url = settings.gemma4_vllm_base_url

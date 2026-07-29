@@ -27,6 +27,16 @@ def _to_str(val) -> str:
     return str(val) if val is not None else ""
 
 
+def _configured_training_model() -> str:
+    configured = (settings.gemma4_training_model_path or "").strip()
+    if not configured:
+        raise ValueError(
+            "GEMMA4_TRAINING_MODEL_PATH is required for real adapter training"
+        )
+    path = Path(configured)
+    return str(path.resolve()) if path.exists() else configured
+
+
 def _write_sft_data(pairs: list[dict], dest: Path) -> None:
     dataset = [
         {"instruction": _to_str(p["user_msg"]), "input": "", "output": _to_str(p["assistant_msg"])}
@@ -143,13 +153,16 @@ async def _run_unsloth_wsl(cfg: dict, cfg_path: Path, label: str) -> bool:
         "wsl.exe", "-d", settings.echo_wsl_distro,
         "env",
         f"PYTHONPATH={settings.echo_wsl_training_pythonpath}",
-        "HF_HOME=/mnt/c/Users/ASUS/.cache/huggingface",
         "HF_HUB_OFFLINE=1",
         "TRANSFORMERS_OFFLINE=1",
+    ]
+    if settings.echo_wsl_hf_home.strip():
+        wsl_args.append(f"HF_HOME={settings.echo_wsl_hf_home.strip()}")
+    wsl_args.extend([
         settings.echo_wsl_training_python,
         script_path,
         "--config", wsl_cfg_path,
-    ]
+    ])
 
     proc = await asyncio.create_subprocess_exec(
         *wsl_args,
@@ -343,7 +356,12 @@ async def _prepare_on_policy_pairs(
     return result
 
 
-async def prepare_clone_datasets(user_id: str, lane: str = "gemma4_e2b") -> dict:
+async def prepare_clone_datasets(
+    user_id: str,
+    lane: str = "gemma4_e2b",
+    *,
+    holdout_pairs: list[dict] | None = None,
+) -> dict:
     """
     Prepare all 4 clone datasets while vLLM is still running.
     SelfCritique, GroupDPO, and OnPolicyGKD make vLLM inference calls for data augmentation.
@@ -351,13 +369,25 @@ async def prepare_clone_datasets(user_id: str, lane: str = "gemma4_e2b") -> dict
     """
     from training.adapter import lora_name_for_user, vllm_model_loaded
 
-    sft_pairs = await get_sft_pairs(user_id)
-    dpo_pairs = await get_dpo_pairs(user_id)
+    holdout_pairs = holdout_pairs or []
+    holdout_ids = {int(p["id"]) for p in holdout_pairs if p.get("id") is not None}
+    holdout_prompts = {
+        " ".join(_to_str(p.get("user_msg")).split())
+        for p in holdout_pairs
+        if _to_str(p.get("user_msg")).strip()
+    }
+    sft_pairs = await get_sft_pairs(
+        user_id,
+        exclude_ids=holdout_ids,
+        exclude_prompts=holdout_prompts,
+    )
+    dpo_pairs = await get_dpo_pairs(user_id, exclude_prompts=holdout_prompts)
 
-    if len(sft_pairs) < settings.min_pairs_for_training:
+    training_floor = max(4, settings.min_pairs_for_training - len(holdout_pairs))
+    if len(sft_pairs) < training_floor:
         log.info(
             "Not enough pairs for clone tournament user=%s (%d < %d)",
-            user_id, len(sft_pairs), settings.min_pairs_for_training,
+            user_id, len(sft_pairs), training_floor,
         )
         return {}
 
@@ -430,6 +460,8 @@ async def prepare_clone_datasets(user_id: str, lane: str = "gemma4_e2b") -> dict
         "on_policy": on_policy_pairs,
         "base_sft": sft_pairs,
         "base_dpo": dpo_pairs,
+        "holdout": holdout_pairs,
+        "training_floor": training_floor,
     }
 
 
@@ -564,6 +596,7 @@ async def run_demo_training_loop(
     max_pairs: int = 8,
     max_steps: int = 8,
     min_pairs: int = 4,
+    run_id: str | None = None,
 ) -> dict:
     """Run one bounded, real Unsloth SFT loop for Kaggle/demo evidence.
 
@@ -587,10 +620,17 @@ async def run_demo_training_loop(
     adapters_dir.mkdir(parents=True, exist_ok=True)
 
     raw_sft = await get_sft_pairs(user_id, limit=max(max_pairs * 2, min_pairs))
-    selected_pairs = [
+    eligible_pairs = [
         p for p in raw_sft
         if _to_str(p.get("user_msg")) and _to_str(p.get("assistant_msg"))
-    ][:max_pairs]
+    ]
+    demo_holdout = (
+        eligible_pairs[:settings.min_evaluation_pairs]
+        if len(eligible_pairs) >= min_pairs + settings.min_evaluation_pairs
+        else []
+    )
+    holdout_ids = {int(p["id"]) for p in demo_holdout if p.get("id") is not None}
+    selected_pairs = [p for p in eligible_pairs if p.get("id") not in holdout_ids][:max_pairs]
     used_pair_ids = {int(p["id"]) for p in selected_pairs if p.get("id") is not None}
     runtime = await training_runtime_info()
 
@@ -662,10 +702,12 @@ async def run_demo_training_loop(
             "next_step": "Seed the demo user or save more high-quality pairs, then rerun this endpoint.",
         }
 
-    stamp = int(time.time())
-    data_file = data_dir / f"demo_loop_sft_data_{stamp}.json"
-    cfg_file = data_dir / f"demo_loop_sft_config_{stamp}.json"
-    out_dir = adapters_dir / f"{prefix}_demo_loop_{stamp}"
+    run_label = run_id or f"demo_{int(time.time())}"
+    demo_data_dir = data_dir / "runs" / run_label
+    demo_data_dir.mkdir(parents=True, exist_ok=True)
+    data_file = demo_data_dir / "sft_data.json"
+    cfg_file = demo_data_dir / "sft_config.json"
+    out_dir = adapters_dir / prefix / "runs" / run_label / "demo_sft"
     out_dir.mkdir(parents=True, exist_ok=True)
     _write_sft_data(selected_pairs, data_file)
     rows_written = _jsonl_count(data_file)
@@ -684,7 +726,7 @@ async def run_demo_training_loop(
 
     prev = await get_last_checkpoint(user_id, lane=lane)
     cfg = {
-        "model_path": str(Path(settings.gemma4_training_model_path).resolve()),
+        "model_path": _configured_training_model(),
         "output_dir": str(out_dir.resolve()),
         "data_path": str(data_file.resolve()),
         "stage": "sft",
@@ -725,7 +767,8 @@ async def run_demo_training_loop(
     vllm_after = await vllm_models_health(timeout=10)
 
     if trained:
-        swap_ok = await hot_swap_adapter(user_id, str(out_dir), record_checkpoint=True, lane=lane)
+        # Load for evaluation without committing it as the user's checkpoint.
+        swap_ok = await hot_swap_adapter(user_id, str(out_dir), record_checkpoint=False, lane=lane)
         if swap_ok:
             try:
                 eval_result = await evaluate_new_adapter(
@@ -734,12 +777,31 @@ async def run_demo_training_loop(
                     prev,
                     lane=lane,
                     exclude_pair_ids=used_pair_ids,
+                    pairs=demo_holdout,
                 )
                 eval_failed = not bool(eval_result.get("passed", True))
-                if eval_failed and prev:
-                    rollback_ok = await hot_swap_adapter(user_id, prev, record_checkpoint=False, lane=lane)
+                if eval_failed:
+                    if prev:
+                        rollback_ok = await hot_swap_adapter(user_id, prev, record_checkpoint=False, lane=lane)
+                    else:
+                        from training.adapter import unload_adapter
+                        rollback_ok = await unload_adapter(user_id, lane=lane)
+                else:
+                    # Commit only after the bounded eval passes.
+                    swap_ok = await hot_swap_adapter(
+                        user_id,
+                        str(out_dir),
+                        record_checkpoint=True,
+                        lane=lane,
+                    )
             except Exception as eval_exc:
-                eval_result = {"passed": True, "skipped_reason": f"eval_error_kept_adapter: {eval_exc}"}
+                eval_failed = True
+                eval_result = {"passed": False, "skipped_reason": f"eval_error: {eval_exc}"}
+                if prev:
+                    rollback_ok = await hot_swap_adapter(user_id, prev, record_checkpoint=False, lane=lane)
+                else:
+                    from training.adapter import unload_adapter
+                    rollback_ok = await unload_adapter(user_id, lane=lane)
         else:
             eval_result = {"passed": False, "skipped_reason": "hot_swap_failed"}
     elif error is None:
@@ -789,6 +851,7 @@ async def run_demo_training_loop(
             "data_path": str(data_file.resolve()),
             "sample": _jsonl_sample(data_file, limit=2),
             "used_pair_ids": sorted(used_pair_ids),
+            "holdout_pair_ids": sorted(holdout_ids),
             "marked_used": False,
         },
         "unsloth": {
@@ -826,6 +889,7 @@ async def run_clone_training(
     lane: str = "gemma4_e2b",
     mark_pairs_used: bool = True,
     used_ids_out: set[int] | None = None,
+    run_id: str | None = None,
 ) -> dict[str, str]:
     """
     Train all 4 clone adapters sequentially via Unsloth.
@@ -833,9 +897,12 @@ async def run_clone_training(
     """
     adapters_dir = Path(settings.adapters_dir)
     prefix = _lane_prefix(user_id)
-    data_dir = Path(settings.training_data_dir) / prefix
+    run_label = run_id or f"manual_{int(time.time())}"
+    data_dir = Path(settings.training_data_dir) / prefix / "runs" / run_label
     data_dir.mkdir(parents=True, exist_ok=True)
-    model_path = str(Path(settings.gemma4_training_model_path).resolve())
+    run_adapters_dir = adapters_dir / prefix / "runs" / run_label
+    run_adapters_dir.mkdir(parents=True, exist_ok=True)
+    model_path = _configured_training_model()
     trained: dict[str, str] = {}
 
     base_cfg = {
@@ -886,14 +953,15 @@ async def run_clone_training(
         stage = spec["stage"]
         data_file = data_dir / f"{name}_data.json"
         cfg_file = data_dir / f"{name}_config.json"
-        out_dir = adapters_dir / f"{prefix}_{name}"
+        out_dir = run_adapters_dir / name
         out_dir.mkdir(parents=True, exist_ok=True)
 
         if stage == "sft":
-            if len(pairs) < settings.min_pairs_for_training:
+            training_floor = int(clone_data.get("training_floor") or settings.min_pairs_for_training)
+            if len(pairs) < training_floor:
                 log.warning(
                     "Clone %s user=%s: only %d pairs (need %d), skipping",
-                    name, user_id, len(pairs), settings.min_pairs_for_training,
+                    name, user_id, len(pairs), training_floor,
                 )
                 continue
             _write_sft_data(pairs, data_file)
@@ -944,46 +1012,37 @@ async def _score_adapter(
     adapter_path: str,
     lane: str = "gemma4_e2b",
     exclude_pair_ids: set[int] | None = None,
-) -> float:
+    evaluation_pairs: list[dict] | None = None,
+) -> dict:
     """
     Hot-swap to this adapter, run word-overlap eval on held-out pairs, return score.
     Returns 0.5 neutral if no holdout pairs available.
     """
     from training.adapter import hot_swap_adapter, lora_name_for_user, adapter_is_compatible
-    from training.evaluator import _fetch_held_out_pairs, _word_overlap, _length_score
+    from training.evaluator import _fetch_held_out_pairs, evaluate_model_on_pairs
 
     if not adapter_is_compatible(adapter_path, lane=lane):
         log.warning("Skipping incompatible adapter for eval: %s", adapter_path)
-        return 0.0
+        return {"score": None, "n_eval": 0, "error": "incompatible_adapter"}
 
     swapped = await hot_swap_adapter(user_id, adapter_path, record_checkpoint=False, lane=lane)
     if not swapped:
         log.warning("Could not load adapter for eval: %s", adapter_path)
-        return 0.0
+        return {"score": None, "n_eval": 0, "error": "adapter_load_failed"}
 
-    pairs = await _fetch_held_out_pairs(user_id, 8, exclude_ids=exclude_pair_ids)
+    if evaluation_pairs is None:
+        pairs = await _fetch_held_out_pairs(
+            user_id,
+            settings.evaluation_holdout_pairs,
+            exclude_ids=exclude_pair_ids,
+        )
+    else:
+        pairs = evaluation_pairs
     if not pairs:
-        return 0.5  # Neutral — no holdout yet, don't penalize
+        return {"score": None, "n_eval": 0, "error": "no_held_out_pairs"}
 
     lora_name = lora_name_for_user(user_id, lane=lane)
-    vllm_base = settings.gemma4_vllm_base_url
-    scores: list[float] = []
-
-    for pair in pairs:
-        prompt = pair.get("user_msg", "")
-        expected = pair.get("assistant_msg", "")
-        if not isinstance(prompt, str) or not isinstance(expected, str):
-            continue
-        generated = await _vllm_generate(
-            prompt[:1000], lora_name, vllm_base, temperature=0.0, max_tokens=256
-        )
-        if generated is None:
-            continue
-        overlap = _word_overlap(generated, expected)
-        length_ok = _length_score(generated, expected)
-        scores.append(overlap * 0.7 + length_ok * 0.3)
-
-    return sum(scores) / len(scores) if scores else 0.0
+    return await evaluate_model_on_pairs(lora_name, pairs)
 
 
 async def pick_clone_winner(
@@ -991,34 +1050,54 @@ async def pick_clone_winner(
     adapter_paths: dict[str, str],
     lane: str = "gemma4_e2b",
     exclude_pair_ids: set[int] | None = None,
-) -> str | None:
+    evaluation_pairs: list[dict] | None = None,
+) -> dict | None:
     """
     Evaluate all trained clones and return the best adapter path.
     Logs scores for every clone.
     """
     if not adapter_paths:
         return None
-    if len(adapter_paths) == 1:
-        return next(iter(adapter_paths.values()))
 
-    scores: dict[str, float] = {}
+    evaluations: dict[str, dict] = {}
     for clone_name, path in adapter_paths.items():
         try:
-            score = await _score_adapter(user_id, path, lane=lane, exclude_pair_ids=exclude_pair_ids)
-            scores[clone_name] = score
-            log.info("Clone eval user=%s %s score=%.3f path=%s", user_id, clone_name, score, path)
+            result = await _score_adapter(
+                user_id,
+                path,
+                lane=lane,
+                exclude_pair_ids=exclude_pair_ids,
+                evaluation_pairs=evaluation_pairs,
+            )
+            evaluations[clone_name] = {**result, "path": path}
+            log.info("Clone eval user=%s %s score=%s path=%s", user_id, clone_name, result.get("score"), path)
         except Exception as e:
             log.warning("Clone eval error user=%s %s: %s", user_id, clone_name, e)
-            scores[clone_name] = 0.0
+            evaluations[clone_name] = {"score": None, "n_eval": 0, "path": path, "error": repr(e)}
 
-    winner_name = max(scores, key=lambda k: scores[k])
+    valid = {name: data for name, data in evaluations.items() if data.get("score") is not None}
+    if not valid:
+        return {
+            "winner_name": None,
+            "winner_path": None,
+            "winner_score": None,
+            "evaluations": evaluations,
+        }
+    winner_name = max(valid, key=lambda k: float(valid[k]["score"]))
     winner_path = adapter_paths[winner_name]
+    winner_score = float(valid[winner_name]["score"])
     log.info(
         "Clone winner user=%s: %s (%.3f) | all=%s",
-        user_id, winner_name, scores[winner_name],
-        {k: round(v, 3) for k, v in scores.items()},
+        user_id, winner_name, winner_score,
+        {k: v.get("score") for k, v in evaluations.items()},
     )
-    return winner_path
+    return {
+        "winner_name": winner_name,
+        "winner_path": winner_path,
+        "winner_score": winner_score,
+        "n_eval": int(valid[winner_name].get("n_eval") or 0),
+        "evaluations": evaluations,
+    }
 
 
 # ─── Legacy single-path training (fallback) ───────────────────────────────────
@@ -1029,13 +1108,26 @@ async def run_training(
     lane: str = "gemma4_e2b",
     mark_pairs_used: bool = True,
     used_ids_out: set[int] | None = None,
+    run_id: str | None = None,
+    holdout_pairs: list[dict] | None = None,
 ) -> str | None:
     """
     Original single-path: SFT → DPO.
     Used as fallback when clone_data is empty or the tournament is disabled.
     """
-    sft_pairs = await get_sft_pairs(user_id)
-    dpo_pairs = await get_dpo_pairs(user_id)
+    holdout_pairs = holdout_pairs or []
+    holdout_ids = {int(p["id"]) for p in holdout_pairs if p.get("id") is not None}
+    holdout_prompts = {
+        " ".join(_to_str(p.get("user_msg")).split())
+        for p in holdout_pairs
+        if _to_str(p.get("user_msg")).strip()
+    }
+    sft_pairs = await get_sft_pairs(
+        user_id,
+        exclude_ids=holdout_ids,
+        exclude_prompts=holdout_prompts,
+    )
+    dpo_pairs = await get_dpo_pairs(user_id, exclude_prompts=holdout_prompts)
 
     try:
         weights = await get_rebalance_weights(user_id)
@@ -1048,26 +1140,30 @@ async def run_training(
     except Exception as e:
         log.warning("Compass rebalancing failed, using raw pairs: %s", e)
 
-    dpo_only = len(sft_pairs) < settings.min_pairs_for_training and len(dpo_pairs) >= 4 and bool(prev_checkpoint)
-    if len(sft_pairs) < settings.min_pairs_for_training and not dpo_only:
+    training_floor = max(4, settings.min_pairs_for_training - len(holdout_pairs))
+    dpo_only = len(sft_pairs) < training_floor and len(dpo_pairs) >= 4 and bool(prev_checkpoint)
+    if len(sft_pairs) < training_floor and not dpo_only:
         log.info(
             "Not enough pairs user=%s sft=%d/%d dpo=%d prev=%s",
-            user_id, len(sft_pairs), settings.min_pairs_for_training, len(dpo_pairs), bool(prev_checkpoint),
+            user_id, len(sft_pairs), training_floor, len(dpo_pairs), bool(prev_checkpoint),
         )
         return None
 
     adapters_dir = Path(settings.adapters_dir)
     prefix = _lane_prefix(user_id)
-    data_dir = Path(settings.training_data_dir) / prefix
+    run_label = run_id or f"manual_{int(time.time())}"
+    data_dir = Path(settings.training_data_dir) / prefix / "runs" / run_label
     data_dir.mkdir(parents=True, exist_ok=True)
-    model_path = str(Path(settings.gemma4_training_model_path).resolve())
+    run_adapters_dir = adapters_dir / prefix / "runs" / run_label
+    run_adapters_dir.mkdir(parents=True, exist_ok=True)
+    model_path = _configured_training_model()
     used_pair_ids: set[int] = set()
 
     if dpo_only:
         final = prev_checkpoint
         log.info("SFT skipped user=%s; running DPO-only update on previous adapter", user_id)
     else:
-        sft_out = adapters_dir / f"{prefix}_sft"
+        sft_out = run_adapters_dir / "sft"
         sft_out.mkdir(parents=True, exist_ok=True)
 
         _write_sft_data(sft_pairs, data_dir / "sft_data.json")
@@ -1096,7 +1192,7 @@ async def run_training(
         used_pair_ids.update(int(p["id"]) for p in sft_pairs if p.get("id") is not None)
 
     if len(dpo_pairs) >= 4 and _write_dpo_data(dpo_pairs, data_dir / "dpo_data.json"):
-        dpo_out = adapters_dir / f"{prefix}_dpo"
+        dpo_out = run_adapters_dir / "dpo"
         dpo_out.mkdir(parents=True, exist_ok=True)
         dpo_cfg = {
             "model_path": model_path,

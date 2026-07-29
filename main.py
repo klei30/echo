@@ -23,7 +23,7 @@ from memory.mem0_client import warmup as mem0_warmup, add_memories, add_raw_memo
 from memory.context import get_active_rules, get_active_skills, get_context
 from router.confidence import get_confidence, update_confidence, detect_topic
 from router.compass import record_topic
-from training.collector import save_pair, count_untrained_pairs, mark_chat_feedback_pair, mark_used
+from training.collector import save_pair, count_untrained_pairs, mark_chat_feedback_pair
 from training.adapter import adapter_exists, adapter_status, ensure_adapter_loaded, lora_name_for_user
 from training.runtime import start_gemma_vllm_after_training, stop_gemma_vllm_for_training, tcp_ok, vllm_models_health
 from loop_events import loop_snapshot, record_event, record_life_event, record_outcome
@@ -41,7 +41,12 @@ from proactive_engine import (
 )
 from thesis import get_current_thesis, refresh_current_thesis
 from training.summary import get_training_summary
-from training.state import create_training_run, finish_training_run, latest_training_run, mark_interrupted_training_runs
+from training.state import (
+    finish_training_run,
+    latest_training_run,
+    mark_interrupted_training_runs,
+    try_create_training_run,
+)
 from models.schemas import ContextRequest, ContextResponse, SaveRequest
 from teacher_policy import infer_importance, record_teacher_usage, should_use_teacher
 
@@ -3568,25 +3573,30 @@ async def training_demo_loop(request: Request):
         )
 
     n = await count_untrained_pairs(user_id)
-    run_id = await create_training_run(user_id, lane, n)
+    run_id = await try_create_training_run(user_id, lane, n)
+    if not run_id:
+        return JSONResponse(
+            {"status": "training_already_running", "lane": lane},
+            status_code=409,
+        )
     _training_status[key] = "running_demo"
-    await record_event(
-        user_id,
-        "training_demo_started",
-        "training",
-        "Bounded demo training started.",
-        {
-            "run_id": run_id,
-            "lane": lane,
-            "pairs": n,
-            "profile": "bounded_demo",
-            "max_pairs": _body_int("max_pairs", 8),
-            "max_steps": _body_int("max_steps", 8),
-        },
-        weight=1.3,
-    )
 
     try:
+        await record_event(
+            user_id,
+            "training_demo_started",
+            "training",
+            "Bounded demo training started.",
+            {
+                "run_id": run_id,
+                "lane": lane,
+                "pairs": n,
+                "profile": "bounded_demo",
+                "max_pairs": _body_int("max_pairs", 8),
+                "max_steps": _body_int("max_steps", 8),
+            },
+            weight=1.3,
+        )
         from training.orchestrator import run_demo_training_loop
 
         evidence = await run_demo_training_loop(
@@ -3595,6 +3605,7 @@ async def training_demo_loop(request: Request):
             max_pairs=_body_int("max_pairs", 8),
             max_steps=_body_int("max_steps", 8),
             min_pairs=_body_int("min_pairs", 4),
+            run_id=run_id,
         )
         evidence["run_id"] = run_id
         status = evidence.get("status") or "failed"
@@ -3616,14 +3627,17 @@ async def training_demo_loop(request: Request):
             summary=summary,
         )
         _training_status[key] = status
-        await record_event(
-            user_id,
-            "training_demo_completed" if status.startswith("complete") else "training_demo_skipped",
-            "training",
-            "Bounded demo training completed." if status.startswith("complete") else "Bounded demo training did not produce an adapter.",
-            {"run_id": run_id, "lane": lane, "status": status, "evidence": evidence},
-            weight=1.5 if status.startswith("complete") else 0.7,
-        )
+        try:
+            await record_event(
+                user_id,
+                "training_demo_completed" if status.startswith("complete") else "training_demo_skipped",
+                "training",
+                "Bounded demo training completed." if status.startswith("complete") else "Bounded demo training did not produce an adapter.",
+                {"run_id": run_id, "lane": lane, "status": status, "evidence": evidence},
+                weight=1.5 if status.startswith("complete") else 0.7,
+            )
+        except Exception:
+            log.exception("Could not record demo training completion user=%s run=%s", user_id, run_id)
         return evidence
     except Exception as e:
         _training_status[key] = "idle"
@@ -3663,141 +3677,72 @@ async def trigger_training(request: Request, background_tasks: BackgroundTasks):
             "lane": lane,
         }
     key = _training_status_key(user_id, lane)
+    run_id = await try_create_training_run(user_id, lane, n)
+    if not run_id:
+        return JSONResponse(
+            {"status": "training_already_running", "lane": lane},
+            status_code=409,
+        )
     _training_status[key] = "running"
-    run_id = await create_training_run(user_id, lane, n)
-    await record_event(
-        user_id,
-        "training_started",
-        "training",
-        f"Shadow training started with {n} untrained moments.",
-        {"run_id": run_id, "pairs": n, "required": settings.min_pairs_for_training, "lane": lane},
-        weight=1.5,
-    )
-    background_tasks.add_task(_run_training_bg, user_id, lane, run_id)
+    try:
+        await record_event(
+            user_id,
+            "training_started",
+            "training",
+            f"Shadow training started with {n} untrained moments.",
+            {"run_id": run_id, "pairs": n, "required": settings.min_pairs_for_training, "lane": lane},
+            weight=1.5,
+        )
+        background_tasks.add_task(_run_training_bg, user_id, lane, run_id)
+    except Exception as e:
+        _training_status[key] = "idle"
+        await finish_training_run(run_id, "failed", error=str(e))
+        raise
     return {"status": "training_started", "pairs": n, "lane": lane, "run_id": run_id}
 
 
 async def _run_training_bg(user_id: str, lane: str = "qwen", run_id: str | None = None) -> None:
-    from training.orchestrator import run_training, prepare_clone_datasets, run_clone_training, pick_clone_winner
-    from training.adapter import hot_swap_adapter, get_last_checkpoint
+    from training.coordinator import run_training_cycle
     lane = _training_lane(lane)
     key = _training_status_key(user_id, lane)
-    prev = await get_last_checkpoint(user_id, lane=lane)
-    stopped_gemma_vllm = False
-    used_pair_ids: set[int] = set()
     try:
-        use_clone_tournament = (lane == "gemma4_e2b")
-        clone_data: dict = {}
-
-        # Phase 1: prepare all 4 clone datasets while vLLM is still running
-        if use_clone_tournament:
-            try:
-                clone_data = await prepare_clone_datasets(user_id, lane)
-                if not any(clone_data.get(k) for k in ("seqkd", "self_critique", "group_dpo", "on_policy")):
-                    log.info("Clone datasets empty user=%s lane=%s — falling back to single-path", user_id, lane)
-                    use_clone_tournament = False
-            except Exception as prep_err:
-                log.warning("Clone dataset prep failed user=%s: %s — falling back to single-path", user_id, prep_err)
-                use_clone_tournament = False
-
-        # Stop vLLM before training begins
-        if lane == "gemma4_e2b":
-            stopped_gemma_vllm = await stop_gemma_vllm_for_training()
-
-        # Phase 2: train — either 4-clone tournament or single SFT+DPO fallback
-        if use_clone_tournament:
-            adapter_paths = await run_clone_training(
-                user_id,
-                clone_data,
-                prev_checkpoint=prev,
-                lane=lane,
-                mark_pairs_used=False,
-                used_ids_out=used_pair_ids,
-            )
-            log.info("Clone training finished user=%s adapters=%s", user_id, list(adapter_paths.keys()))
-        else:
-            single_path = await run_training(
-                user_id,
-                prev_checkpoint=prev,
-                lane=lane,
-                mark_pairs_used=False,
-                used_ids_out=used_pair_ids,
-            )
-            adapter_paths = {"base": single_path} if single_path else {}
-
-        # Restart vLLM before winner evaluation
-        if stopped_gemma_vllm:
-            _training_status[key] = "loading_adapter"
-            await start_gemma_vllm_after_training()
-
-        # Phase 3: pick clone winner (eval each adapter via vLLM) then hot-swap
-        if use_clone_tournament and len(adapter_paths) > 1:
-            path = await pick_clone_winner(user_id, adapter_paths, lane, exclude_pair_ids=used_pair_ids)
-            log.info("Clone tournament winner=%s user=%s", path, user_id)
-        else:
-            path = next(iter(adapter_paths.values()), None) if adapter_paths else None
-
-        if path:
-            swapped = await hot_swap_adapter(user_id, path, record_checkpoint=True, lane=lane)
-            eval_result: dict = {}
-            eval_failed = False
-            if swapped:
-                from training.evaluator import evaluate_new_adapter
-                try:
-                    eval_result = await evaluate_new_adapter(user_id, path, prev, lane=lane, exclude_pair_ids=used_pair_ids)
-                    if not eval_result.get("passed", True):
-                        eval_failed = True
-                        rolled_back = False
-                        if prev:
-                            rolled_back = await hot_swap_adapter(user_id, prev, record_checkpoint=False, lane=lane)
-                        log.warning(
-                            "Eval failed user=%s lane=%s score=%s — %s",
-                            user_id, lane,
-                            eval_result.get("score"),
-                            "rolled back to prev adapter" if rolled_back else "no prev adapter to roll back to",
-                        )
-                except Exception as eval_err:
-                    log.warning("Eval error user=%s lane=%s: %s — keeping adapter", user_id, lane, eval_err)
-            if swapped and not eval_failed and used_pair_ids:
-                await mark_used(user_id, used_pair_ids)
-                log.info("Marked %d pairs used after successful training user=%s", len(used_pair_ids), user_id)
-            summary = await get_training_summary(user_id, lane=lane)
-            summary["eval"] = eval_result
-            final_status = "complete_eval_failed" if eval_failed else ("complete" if swapped else "complete_adapter_not_loaded")
-            if run_id:
-                await finish_training_run(
-                    run_id,
-                    final_status,
-                    adapter_path=path,
-                    error=(f"Eval failed (score={eval_result.get('score')}). Rolled back." if eval_failed else (None if swapped else "Adapter trained but vLLM hot-swap failed.")),
-                    summary=summary,
-                )
+        if not run_id:
+            raise RuntimeError("Training run id is required")
+        result = await run_training_cycle(user_id, lane, run_id)
+        status = result.get("status") or "failed"
+        promoted = bool(result.get("promoted"))
+        restore_ok = bool(result.get("restore_ok", True))
+        await finish_training_run(
+            run_id,
+            status,
+            adapter_path=result.get("promoted_path"),
+            error=(
+                result.get("reason")
+                if status == "skipped"
+                else ("Previous adapter restore failed." if status == "complete_restore_failed" else None)
+            ),
+            summary=result.get("summary") or result,
+        )
+        try:
             await record_event(
                 user_id,
-                "training_completed" if (swapped and not eval_failed) else ("training_eval_failed" if eval_failed else "training_completed_adapter_not_loaded"),
+                "training_completed" if promoted else "training_not_promoted",
                 "training",
-                "Your shadow trained, loaded, and passed eval." if (swapped and not eval_failed) else ("Your shadow trained but the eval check failed — keeping previous adapter." if eval_failed else "Your shadow trained, but the adapter was not loaded into vLLM."),
-                {"run_id": run_id, "path": path, "summary": summary, "lane": lane, "adapter_loaded": swapped and not eval_failed, "eval": eval_result},
-                weight=2.0,
+                "Your shadow trained and promoted a stronger Home Brain Adapter."
+                if promoted
+                else (
+                    "Your shadow trained, but restoring the previous adapter needs attention."
+                    if not restore_ok
+                    else "Your shadow trained, but the previous Home Brain was stronger and was kept."
+                ),
+                {"run_id": run_id, "lane": lane, "result": result},
+                weight=2.0 if promoted else 1.0,
             )
-            log.info("Training complete user=%s lane=%s path=%s eval_passed=%s", user_id, lane, path, not eval_failed)
-        else:
-            if run_id:
-                await finish_training_run(run_id, "skipped", error="No adapter was produced.")
-            await record_event(
-                user_id,
-                "training_skipped",
-                "training",
-                "Training ran but no adapter was produced.",
-                {"run_id": run_id, "previous_checkpoint": prev, "lane": lane},
-                weight=0.6,
-            )
-            log.warning("Training returned no adapter for user=%s lane=%s", user_id, lane)
-        _training_status[key] = "complete"
+        except Exception:
+            log.exception("Could not record training completion event user=%s run=%s", user_id, run_id)
+        _training_status[key] = status
     except Exception as e:
         _training_status[key] = "idle"
-        if stopped_gemma_vllm:
-            await start_gemma_vllm_after_training()
         if run_id:
             await finish_training_run(run_id, "failed", error=str(e))
         await record_event(
@@ -3809,65 +3754,6 @@ async def _run_training_bg(user_id: str, lane: str = "qwen", run_id: str | None 
             weight=1.0,
         )
         log.exception("Training failed for user=%s lane=%s", user_id, lane)
-
-
-async def _run_process(args: list[str], timeout: int = 30) -> tuple[int, str, str]:
-    proc = await asyncio.create_subprocess_exec(
-        *args,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
-        try:
-            proc.kill()
-        except ProcessLookupError:
-            pass
-        return 124, "", "timeout"
-    return proc.returncode or 0, stdout.decode(errors="ignore"), stderr.decode(errors="ignore")
-
-
-async def _stop_gemma_vllm_for_training() -> bool:
-    rc, _out, err = await _run_process([
-        "wsl.exe", "-d", settings.echo_wsl_distro, "sh", "-lc",
-        "pkill -f '/home/klei/vllm-env/bin/vllm serve .*gemma4_e2b' || true",
-    ])
-    if rc != 0:
-        if err.strip():
-            log.warning("Could not confirm Gemma vLLM stop before training: %s", err[-500:])
-        else:
-            log.info("Gemma vLLM stop command returned rc=%s; continuing with training", rc)
-        return True
-    log.info("Stopped Gemma vLLM before Gemma training")
-    await asyncio.sleep(5)
-    return True
-
-
-async def _start_gemma_vllm_after_training() -> None:
-    out_log = open("gemma4_vllm.out.log", "ab")
-    err_log = open("gemma4_vllm.err.log", "ab")
-    try:
-        await asyncio.create_subprocess_exec(
-            "wsl.exe", "-d", settings.echo_wsl_distro, "bash",
-            "/mnt/c/Users/ASUS/Desktop/echo/start_gemma4_e2b_vllm.sh",
-            stdout=out_log,
-            stderr=err_log,
-        )
-    finally:
-        out_log.close()
-        err_log.close()
-    for _ in range(36):
-        try:
-            async with httpx.AsyncClient(timeout=5) as client:
-                resp = await client.get(f"{settings.gemma4_vllm_base_url}/models")
-            if resp.status_code == 200:
-                log.info("Gemma vLLM restarted after training")
-                return
-        except Exception:
-            pass
-        await asyncio.sleep(5)
-    log.warning("Gemma vLLM restart was requested but health check did not recover yet")
 
 
 @app.post("/context", response_model=ContextResponse)

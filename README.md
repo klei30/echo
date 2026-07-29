@@ -242,6 +242,15 @@ Each training lane acts like a specialized clone:
 
 The eval gate decides what comes back. If an adapter does not pass, Echo keeps the previous Home Brain instead of promoting a weaker model.
 
+CPU safety tests cover the orchestration and promotion gate. The bounded
+[GPU acceptance test](docs/GPU_ACCEPTANCE_TEST.md) verifies the remaining
+Gemma 4, Unsloth, CUDA, and vLLM boundary.
+
+The active production path is `training/coordinator.py` plus
+`training/orchestrator.py` and the SQLite state modules. The older
+`training/pipeline.py`/`clones.py` Postgres and OpenAI experiment is retained
+as reference code and remains disabled by `legacy_openai_pipeline_enabled`.
+
 ---
 
 ## Gemma 4 Usage

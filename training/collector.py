@@ -141,29 +141,53 @@ async def mark_chat_feedback_pair(
     return {"updated": False, "created": created}
 
 
-async def get_sft_pairs(user_id: str, limit: int = 500) -> list[dict]:
+async def get_sft_pairs(
+    user_id: str,
+    limit: int = 500,
+    exclude_ids: set[int] | list[int] | None = None,
+    exclude_prompts: set[str] | list[str] | None = None,
+) -> list[dict]:
     # Include ALL high-quality pairs regardless of model (local + teacher)
     # The shadow clone learns from both teacher and its own responses
+    excluded = {int(i) for i in (exclude_ids or []) if i is not None}
+    excluded_prompts = {" ".join(str(p).split()) for p in (exclude_prompts or []) if str(p).strip()}
+    extra_sql = ""
+    extra_args: list[int] = []
+    if excluded:
+        placeholders = ",".join("?" for _ in excluded)
+        extra_sql = f" AND id NOT IN ({placeholders})"
+        extra_args = list(sorted(excluded))
     async with get_conn() as db:
         async with db.execute(
-            """
+            f"""
             SELECT id, user_msg, assistant_msg, topic, perplexity, model_used, engagement_signal
             FROM training_pairs
             WHERE user_id = ?
               AND engagement_signal != 'thumbs_down'
               AND perplexity >= ?
               AND used_in_training = 0
+              {extra_sql}
             ORDER BY perplexity DESC
             LIMIT ?
             """,
-            (user_id, settings.quality_threshold, limit * 2),
+            (user_id, settings.quality_threshold, *extra_args, limit * 2),
         ) as cur:
             rows = await cur.fetchall()
-    return [dict(r) for r in rows if not _is_poisoned(r["assistant_msg"])][:limit]
+    return [
+        dict(r)
+        for r in rows
+        if not _is_poisoned(r["assistant_msg"])
+        and " ".join(str(r["user_msg"]).split()) not in excluded_prompts
+    ][:limit]
 
 
-async def get_dpo_pairs(user_id: str, limit: int = 200) -> list[dict]:
+async def get_dpo_pairs(
+    user_id: str,
+    limit: int = 200,
+    exclude_prompts: set[str] | list[str] | None = None,
+) -> list[dict]:
     # DPO needs BOTH thumbs_up AND thumbs_down for the SAME prompt
+    excluded_prompts = {" ".join(str(p).split()) for p in (exclude_prompts or []) if str(p).strip()}
     async with get_conn() as db:
         async with db.execute(
             """
@@ -185,6 +209,8 @@ async def get_dpo_pairs(user_id: str, limit: int = 200) -> list[dict]:
         if _is_poisoned(r["assistant_msg"]):
             continue
         key = r["user_msg"]
+        if " ".join(str(key).split()) in excluded_prompts:
+            continue
         entry = by_prompt.setdefault(key, {"chosen": None, "rejected": None, "chosen_id": None, "rejected_id": None})
         if r["engagement_signal"] == "thumbs_up" and entry["chosen"] is None:
             entry["chosen"] = r["assistant_msg"]

@@ -158,12 +158,14 @@ async def start_gemma_vllm_after_training() -> bool:
         return False
 
     if runtime == "windows_wsl":
+        configured_script = (settings.echo_wsl_vllm_start_script or "").strip()
+        start_script = configured_script or _win_path_to_wsl(root / "start_gemma4_e2b_vllm.sh")
         out_log = open(root / "gemma4_vllm.current.out.log", "ab")
         err_log = open(root / "gemma4_vllm.current.err.log", "ab")
         try:
             await asyncio.create_subprocess_exec(
                 "wsl.exe", "-d", settings.echo_wsl_distro, "bash",
-                "/mnt/c/Users/ASUS/Desktop/echo/start_gemma4_e2b_vllm.sh",
+                start_script,
                 stdout=out_log,
                 stderr=err_log,
             )
@@ -209,3 +211,13 @@ async def start_gemma_vllm_after_training() -> bool:
         await asyncio.sleep(5)
     log.warning("Gemma vLLM restart was requested but /models did not recover")
     return False
+
+
+def _win_path_to_wsl(path: Path) -> str:
+    """Convert an absolute Windows path without assuming a username or drive."""
+    resolved = path.resolve()
+    drive = resolved.drive.rstrip(":").lower()
+    if not drive:
+        return str(resolved).replace("\\", "/")
+    relative = str(resolved)[len(resolved.drive):].lstrip("\\/")
+    return f"/mnt/{drive}/{relative.replace(chr(92), '/')}"

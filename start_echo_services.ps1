@@ -187,10 +187,15 @@ function Start-Gemma {
 
     $out = Join-Path $Root "gemma4_vllm.current.out.log"
     $err = Join-Path $Root "gemma4_vllm.current.err.log"
+    $WslRoot = (& wsl.exe -d $WslDistro wslpath -u $Root).Trim()
+    if (-not $WslRoot) {
+        throw "Could not translate Echo root to a WSL path: $Root"
+    }
+    $GemmaScript = "$WslRoot/start_gemma4_e2b_vllm.sh"
     Remove-Item $out, $err -Force -ErrorAction SilentlyContinue
 
     Start-Process -FilePath "wsl.exe" `
-        -ArgumentList @("-d", $WslDistro, "bash", "/mnt/c/Users/ASUS/Desktop/echo/start_gemma4_e2b_vllm.sh") `
+        -ArgumentList @("-d", $WslDistro, "bash", $GemmaScript) `
         -WorkingDirectory $Root `
         -RedirectStandardOutput $out `
         -RedirectStandardError $err `

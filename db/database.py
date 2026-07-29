@@ -422,6 +422,14 @@ async def init_tables() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_training_runs_user_lane_time
                 ON training_runs(user_id, lane, started_at);
+
+            CREATE TABLE IF NOT EXISTS training_lock (
+                resource     TEXT PRIMARY KEY,
+                run_id       TEXT NOT NULL,
+                user_id      TEXT NOT NULL,
+                lane         TEXT NOT NULL,
+                acquired_at  TEXT DEFAULT (datetime('now'))
+            );
         """)
         async with db.execute("PRAGMA table_info(checkpoints)") as cur:
             checkpoint_cols = {row[1] for row in await cur.fetchall()}
